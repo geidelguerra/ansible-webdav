@@ -1,0 +1,84 @@
+---
+- name: Setup a WebDAV server
+  hosts: all
+  gather_facts: false
+  vars:
+    webdav_users_file: /etc/webdav/.htpasswd
+  tasks:
+    - name: Install packages
+      ansible.builtin.apt:
+        name:
+          - nginx
+          - nginx-extras
+          - libnginx-mod-http-dav-ext
+          - libnginx-mod-http-auth-pam
+          - python3-passlib
+          - fail2ban
+        update_cache: true
+      become: true
+
+    - name: Install certbot
+      community.general.snap:
+        name: certbot
+        classic: yes
+      become: true
+
+    - name: Create webdav root directory
+      ansible.builtin.file:
+        path: "{{ webdav_root }}"
+        state: directory
+        group: www-data
+        owner: www-data
+      become: true
+
+    - name: Manage WebDAV users
+      community.general.htpasswd:
+        path: "{{ webdav_users_file }}"
+        name: "{{ item.username }}"
+        password: "{{ item.password }}"
+        state: "{{ item.state|default('present') }}"
+        owner: root
+        group: www-data
+        mode: "640"
+      loop: "{{ webdav_users }}"
+      become: true
+      no_log: true
+      notify: Reload Nginx
+
+    - name: Copy Nginx file
+      ansible.builtin.template:
+        src: templates/webdav.conf.j2
+        dest: /etc/nginx/sites-enabled/webdav.conf
+      become: true
+      notify: Reload Nginx
+
+    - name: Install certificate
+      ansible.builtin.command: "/snap/bin/certbot certonly --nginx -n --agree-tos --email {{ email }} -d {{ webdav_domain }}"
+      become: true
+
+    - name: Ensure fail2ban is enable and running
+      ansible.builtin.service:
+        name: fail2ban
+        enabled: true
+        state: started
+      become: true
+
+    - name: Copy fail2ban conf
+      ansible.builtin.template:
+        src: templates/fail2ban_jail.local.j2
+        dest: /etc/fail2ban/jail.local
+      become: true
+      notify: Restart fail2ban
+
+  handlers:
+    - name: Reload Nginx
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded
+      become: true
+
+    - name: Restart fail2ban
+      ansible.builtin.service:
+        name: fail2ban
+        state: restarted
+      become: true
